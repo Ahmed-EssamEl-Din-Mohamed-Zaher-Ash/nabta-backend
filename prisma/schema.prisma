@@ -1,0 +1,246 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Profile {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  role         String // admin, sales, account, ops, finance, driver
+  passwordHash String?  @map("password_hash") // bcrypt; null = login disabled (or dev fallback)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Links a driver-role login to its Driver record (order assignment identity)
+  driverId String? @unique @map("driver_id")
+  driver   Driver? @relation("ProfileDriver", fields: [driverId], references: [id], onDelete: SetNull)
+
+  ordersUpdated Order[] @relation("UpdatedBy")
+
+  @@map("profiles")
+}
+
+model Vendor {
+  id            String  @id @default(cuid())
+  name          String
+  nameAr        String  @map("name_ar")
+  phone         String
+  email         String
+  address       String
+  bankName      String  @map("bank_name")
+  iban          String
+  accountNumber String  @map("account_number")
+  accountHolder String  @map("account_holder")
+  payoutTerms   Int     @default(0) @map("payout_terms") // number of days
+  notes         String?
+
+  products Product[]
+  orders   Order[]
+
+  @@map("vendors")
+}
+
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  nameAr      String  @map("name_ar")
+  category    String
+  price       Float
+  unit        String
+  stock       Int     @default(0)
+  description String?
+
+  vendorId String @map("vendor_id")
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  orderItems OrderItem[]
+
+  @@map("products")
+}
+
+model Customer {
+  id       String  @id @default(cuid())
+  name     String
+  phone    String
+  email    String
+  address  String
+  location Json // lat, lng, address
+  notes    String?
+
+  orders Order[]
+
+  @@map("customers")
+}
+
+model Driver {
+  id     String  @id @default(cuid())
+  name   String
+  phone  String
+  status String  @default("active") // active, inactive
+  notes  String?
+
+  vehicleId String?  @unique @map("vehicle_id")
+  vehicle   Vehicle? @relation("DriverVehicle", fields: [vehicleId], references: [id])
+
+  vehiclesOwned Vehicle[] @relation("VehicleDriverOwner")
+  routes        Route[]
+  orders        Order[]
+  profile       Profile?  @relation("ProfileDriver")
+
+  @@map("drivers")
+}
+
+model Vehicle {
+  id     String  @id @default(cuid())
+  plate  String  @unique
+  type   String
+  model  String
+  color  String
+  status String  @default("active")
+  notes  String?
+
+  driverId String? @map("driver_id")
+  driver   Driver? @relation("VehicleDriverOwner", fields: [driverId], references: [id], onDelete: SetNull)
+
+  assignedDriver Driver? @relation("DriverVehicle")
+  orders         Order[]
+
+  @@map("vehicles")
+}
+
+model Route {
+  id          String  @id @default(cuid())
+  name        String
+  area        String
+  description String?
+  notes       String?
+
+  driverId String? @map("driver_id")
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  orders Order[]
+
+  @@map("routes")
+}
+
+model TrackingSession {
+  id          String    @id @default(uuid())
+  orderRef    String    @map("order_ref")
+  orderNumber String?   @map("order_number")
+  driverRef   String    @map("driver_ref")
+  vehicleRef  String?   @map("vehicle_ref")
+  status      String    @default("active")
+  publicTopic String    @unique @map("public_topic")
+  startedAt   DateTime? @map("started_at")
+  endedAt     DateTime? @map("ended_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  pings  VehicleLocationPing[]
+  latest VehicleLatestLocation?
+
+  @@index([orderRef])
+  @@index([driverRef, status])
+  @@map("tracking_sessions")
+}
+
+model VehicleLocationPing {
+  id         String   @id @default(uuid())
+  sessionId  String   @map("session_id")
+  driverRef  String   @map("driver_ref")
+  vehicleRef String?  @map("vehicle_ref")
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  speed      Float?
+  heading    Float?
+  recordedAt DateTime @default(now()) @map("recorded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session TrackingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, recordedAt])
+  @@index([recordedAt])
+  @@map("vehicle_location_pings")
+}
+
+model VehicleLatestLocation {
+  sessionId  String   @id @map("session_id")
+  driverRef  String   @map("driver_ref")
+  vehicleRef String?  @map("vehicle_ref")
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  speed      Float?
+  heading    Float?
+  recordedAt DateTime @map("recorded_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  session TrackingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("vehicle_latest_locations")
+}
+
+model Order {
+  id              String  @id @default(cuid())
+  orderNumber     String  @unique @map("order_number")
+  date            String // YYYY-MM-DD
+  status          String // new, confirmed, preparing, ready, out, delivered, paid, cancelled, failed
+  deliveryAddress String  @map("delivery_address")
+  location        Json // lat, lng, address
+  deliveryFee     Float   @default(0) @map("delivery_fee")
+  taxRate         Float   @default(5) @map("tax_rate")
+  notes           String?
+  paymentProof    String? @map("payment_proof") // URL to payment proof
+  failureReason   String? @map("failure_reason")
+
+  confirmedAt  DateTime? @map("confirmed_at")
+  preparedAt   DateTime? @map("prepared_at")
+  readyAt      DateTime? @map("ready_at")
+  dispatchedAt DateTime? @map("dispatched_at")
+  deliveredAt  DateTime? @map("delivered_at")
+  paidAt       DateTime? @map("paid_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  customerId String   @map("customer_id")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  vendorId String @map("vendor_id")
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  driverId String? @map("driver_id")
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  vehicleId String?  @map("vehicle_id")
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  routeId String? @map("route_id")
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+
+  updatedById String?  @map("updated_by_id")
+  updatedBy   Profile? @relation("UpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  items OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id    String @id @default(uuid())
+  qty   Int
+  price Float // Historical price at time of purchase
+
+  orderId String @map("order_id")
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
